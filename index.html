@@ -997,7 +997,7 @@ function mealStatus(){
 
 /* ═════════ LAGRING ═════════ */
 const KEY='is5';
-const DEF=()=>({textSize:'normal',theme:'dark',trainTime:'20:00',log:{},done:{},rate:{},food:{},cardio:{},eaten:{},body:{},meals:{},dayPlan:{},pantry:[],recent:[],prog:{id:'ul4',mod:{}},budget:2300,protein:145,start:null,plan:null,apiKey:''});
+const DEF=()=>({textSize:'normal',theme:'dark',trainTime:'20:00',log:{},done:{},rate:{},food:{},cardio:{},eaten:{},body:{},meals:{},dayPlan:{},pantry:[],recent:[],prog:{id:'ul4',mod:{}},budget:2300,protein:145,start:null,plan:null,geminiKey:''});
 let S=load();
 applyProgram();
 function load(){
@@ -1005,6 +1005,7 @@ function load(){
     const raw=localStorage.getItem(KEY)||localStorage.getItem('is3');
     const s=Object.assign(DEF(),JSON.parse(raw||'{}'));
     if(!s.start)s.start=mondayOf(new Date());
+    delete s.apiKey; // gammal Claude-nyckel används inte längre
     // Befintlig användare från tidigare version: behåll mål, skapa profil tyst
     if(!s.profile&&hasHistory(s))s.profile={name:'',sex:'m',age:35,h:170,w:70,goal:'recomp',act:'low',auto:true};
     return s;
@@ -1088,7 +1089,7 @@ function addFood(){
 function delFood(i){const x=S.food[today()][i];if(x.meal!==undefined&&S.eaten[today()])delete S.eaten[today()][x.meal];S.food[today()].splice(i,1);save();render()}
 function resetPlan(){S.plan=null;delete S.dayPlan[today()];save();aiMsg='Standardplanen är tillbaka.';render()}
 
-async function askClaude(){
+async function askAI(){
   if(aiBusy)return;
   const wish=(document.getElementById('ai-wish').value||'').trim();
   aiBusy=true;aiMsg='';render();
@@ -1104,12 +1105,7 @@ Svara ENDAST med JSON, ingen annan text, i exakt detta format:
 {"meals":[{"role":"frukost|lunch|mellanmal|pre|post","time":"HH:MM","foods":[{"n":"Namn","amt":60,"unit":"g|st|dl|msk","kcal":222,"p":8,"c":35,"f":4,"flex":true}]}],"note":"en kort mening på svenska om vad du ändrade"}
 "kcal" och "p" gäller hela mängden. Sätt "flex":true på kolhydratkällor (ris, pasta, potatis, havre, bröd) så att appen kan skala dem. Summan ska hamna inom ±50 kcal från målet.`;
   try{
-    const headers={'Content-Type':'application/json'};
-    if(S.apiKey){headers['x-api-key']=S.apiKey;headers['anthropic-version']='2023-06-01';headers['anthropic-dangerous-direct-browser-access']='true'}
-    const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers,body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:1000,messages:[{role:'user',content:prompt}]})});
-    if(!res.ok)throw new Error(res.status===401?'Ogiltig API-nyckel.':'Claude svarade med fel '+res.status+'.');
-    const data=await res.json();
-    const txt=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').replace(/```json|```/g,'').trim();
+    const txt=(await callAI(prompt)).replace(/```json|```/g,'').trim();
     const j=JSON.parse(txt.slice(txt.indexOf('{'),txt.lastIndexOf('}')+1));
     if(!j.meals||!j.meals.length)throw new Error('Svaret saknade måltider.');
     S.plan=j.meals.map(m=>({role:m.role,time:m.time,foods:m.foods.filter(f=>f.amt>0).map(f=>F(f.n,+f.amt,f.unit,(+f.kcal||0)/f.amt,(+f.p||0)/f.amt,f.flex,f.c!=null?(+f.c)/f.amt:undefined,f.f!=null?(+f.f)/f.amt:undefined))}))
@@ -1117,7 +1113,7 @@ Svara ENDAST med JSON, ingen annan text, i exakt detta format:
     S.eaten[today()]={};S.food[today()]=(S.food[today()]||[]).filter(x=>x.meal===undefined);
     save();aiMsg='✓ '+(j.note||'Ny plan skapad.');
   }catch(e){
-    aiMsg=(e.message&&!/fetch|network/i.test(e.message))?e.message:'Kunde inte nå Claude. Lägg in en API-nyckel under Inställningar.';
+    aiMsg=e instanceof SyntaxError?'Gemini gav inget användbart svar. Försök igen.':e.message;
   }
   aiBusy=false;render();
 }
@@ -1312,7 +1308,7 @@ function mealBody(ml,i,st){
   const items=L?L.items:ml.foods;
   const pk=Math.min(100,a.kcal/T.kcal*100), pp=Math.min(100,a.p/T.p*100);
   return `${top}
-    <div class="foods">${ml.o&&!L?'<div class="otag" style="margin:0 0 4px">Justerad av Claude idag</div>':''}${items.map(x=>`<div class="food"><span>${x.n}</span><b>${fmtAmt(x.amt)} ${x.unit}</b></div>`).join('')}</div>
+    <div class="foods">${ml.o&&!L?'<div class="otag" style="margin:0 0 4px">Justerad av Gemini idag</div>':''}${items.map(x=>`<div class="food"><span>${x.n}</span><b>${fmtAmt(x.amt)} ${x.unit}</b></div>`).join('')}</div>
     <div class="run">Efter måltiden${st.eaten?'':' (om du äter planen)'}: <b>${a.kcal} / ${T.kcal} kcal</b> · <b>${a.p} / ${T.p} g protein</b>
       <div class="run-bar"><i style="width:${pk}%;background:var(--cardio)"></i></div><div class="run-bar"><i style="width:${pp}%;background:var(--leg)"></i></div></div>`;
 }
@@ -1445,10 +1441,10 @@ Svara ENDAST med JSON:
 {"meals":[{"i":2,"foods":[{"n":"Namn","amt":150,"unit":"g|st|dl|msk","kcal":165,"p":35,"c":0,"f":2}]}],"note":"kort mening på svenska"}
 "kcal", "p" (protein), "c" (kolhydrater) och "f" (fett) gäller hela mängden. Dagsmål för kolhydrater ca ${dayTargets().c} g och fett ca ${dayTargets().f} g.`;
   try{
-    const txt=(await callClaude(prompt)).replace(/```json|```/g,'');
+    const txt=(await callAI(prompt)).replace(/```json|```/g,'');
     const j=JSON.parse(txt.slice(txt.indexOf('{'),txt.lastIndexOf('}')+1));
     const o={};(j.meals||[]).forEach(m=>{if(e[m.i]||!plan[m.i])return;o[m.i]=m.foods.filter(f=>f.amt>0).map(f=>({n:f.n,amt:+f.amt,unit:f.unit,kU:(+f.kcal||0)/f.amt,pU:(+f.p||0)/f.amt,cU:f.c!=null?(+f.c)/f.amt:undefined,fU:f.f!=null?(+f.f)/f.amt:undefined}))});
-    if(!Object.keys(o).length)throw new Error('Claude gav inget användbart förslag. Försök igen.');
+    if(!Object.keys(o).length)throw new Error('Gemini gav inget användbart förslag. Försök igen.');
     S.dayPlan={[today()]:o};save();aiMsg='✓ '+(j.note||'Resten av dagen är justerad.');
   }catch(err){aiMsg=err.message||'Något gick fel.'}
   aiBusy=false;render();
@@ -1473,18 +1469,28 @@ Du är en kort och konkret träningscoach för ${whoTxt()}. Svara på svenska me
 Dagens schema och status:\n${rows}
 Kalorier idag: ${kcal} av ${S.budget} kcal, protein ${Math.round(prot)} av ${S.protein} g. Set klara idag: ${ts.done}/${ts.total}.
 Utgå från klockslaget just nu och säg vad ${S.profile&&S.profile.name||'personen'} ska göra härnäst (äta, träna, vila, sova) och om han ligger rätt till med kalorier och protein.`;
-  try{coachAns=await callClaude(prompt)}catch(e){coachAns=e.message}
+  try{coachAns=await callAI(prompt)}catch(e){coachAns=e.message}
   coachBusy=false;render();
 }
-async function callClaude(prompt){
-  const headers={'Content-Type':'application/json'};
-  if(S.apiKey){headers['x-api-key']=S.apiKey;headers['anthropic-version']='2023-06-01';headers['anthropic-dangerous-direct-browser-access']='true'}
+/* Gemini (gratisnivån hos Google). Nyckeln sparas bara på telefonen. */
+const GEMINI_URL='https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
+async function callAI(prompt,o={}){
+  if(!S.geminiKey)throw new Error('Lägg in en gratis Gemini-nyckel under Inställningar → Mer inställningar.');
+  const body={contents:[{role:'user',parts:[...(o.parts||[]),{text:prompt}]}]};
+  if(o.system)body.systemInstruction={parts:[{text:o.system}]};
+  if(o.schema)body.generationConfig={responseMimeType:'application/json',responseJsonSchema:o.schema};
   let res;
-  try{res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers,body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:1000,messages:[{role:'user',content:prompt}]})})}
-  catch(e){throw new Error('Kunde inte nå Claude. Lägg in en API-nyckel under Inställningar.')}
-  if(!res.ok)throw new Error(res.status===401?'Ogiltig API-nyckel.':'Claude svarade med fel '+res.status+'.');
-  const data=await res.json();
-  return (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
+  try{res=await fetch(GEMINI_URL,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':S.geminiKey},body:JSON.stringify(body)})}
+  catch(e){throw new Error('Kunde inte nå Gemini. Kontrollera nätet.')}
+  if(!res.ok){
+    let m='';try{m=((await res.json()).error||{}).message||''}catch(e){}
+    throw new Error(res.status===429?'Gratiskvoten hos Gemini är slut för stunden. Försök igen senare.':(res.status===403||/api key/i.test(m))?'Ogiltig Gemini-nyckel.':'Gemini svarade med fel '+res.status+'.');
+  }
+  const d=await res.json(),c=(d.candidates||[])[0];
+  if(d.promptFeedback&&d.promptFeedback.blockReason)throw new Error('Gemini ville inte svara på det här.');
+  const txt=((c&&c.content&&c.content.parts)||[]).filter(x=>!x.thought&&x.text).map(x=>x.text).join('').trim();
+  if(!txt)throw new Error(c&&/SAFETY|PROHIBITED/.test(c.finishReason||'')?'Gemini ville inte svara på det här.':'Gemini gav inget svar. Försök igen.');
+  return txt;
 }
 
 /* ═════════ KROPP (logik) ═════════ */
@@ -2167,12 +2173,12 @@ function viewToday(){
     ${rowList(items.map(x=>({...x,now:x===nx,r:x.ok?'Klart':x.t})))}
     <h2>Veckan</h2>
     <div class="card iso-card">${W.svg}<p class="small iso-note">Höjden visar antal set. ${W.tot} set${W.card?` och ${W.card} konditionspass`:''} den här veckan.</p></div>
-    <button class="ask" onclick="openCoach()"><span aria-hidden="true">💬</span>Osäker? Fråga Claude vad du ska göra nu</button>`;
+    <button class="ask" onclick="openCoach()"><span aria-hidden="true">💬</span>Osäker? Fråga Gemini vad du ska göra nu</button>`;
 }
 function openCoach(){
-  dlgR=()=>{const el=document.getElementById('dlg');if(!el)return;el.innerHTML=`<div class="sh-grip"></div><div class="sh-top"><div><div class="sh-t">Fråga Claude</div><div class="sh-sub">Claude ser klockan, vad du ätit och hur träningen gått idag.</div></div><button class="sh-x" onclick="closeDlg()">Stäng</button></div>
+  dlgR=()=>{const el=document.getElementById('dlg');if(!el)return;el.innerHTML=`<div class="sh-grip"></div><div class="sh-top"><div><div class="sh-t">Fråga Gemini</div><div class="sh-sub">Gemini ser klockan, vad du ätit och hur träningen gått idag.</div></div><button class="sh-x" onclick="closeDlg()">Stäng</button></div>
     ${coachAns?`<div class="note ok" style="white-space:pre-line">${escH(coachAns)}</div>`:''}
-    <div class="sh-btns"><button class="pri" ${coachBusy?'disabled':''} onclick="askCoach()">${coachBusy?'Claude tänker…':coachAns?'Fråga igen':'Vad ska jag göra nu?'}</button></div>`};
+    <div class="sh-btns"><button class="pri" ${coachBusy?'disabled':''} onclick="askCoach()">${coachBusy?'Gemini tänker…':coachAns?'Fråga igen':'Vad ska jag göra nu?'}</button></div>`};
   document.getElementById('dlg-bg').classList.add('show');dlgR();
 }
 
@@ -2350,14 +2356,14 @@ function viewFood(){
     <h2>Mer</h2>
     <div class="list school">
       <details><summary>Förslag på dagens måltider</summary><div><p class="small" style="margin-bottom:.6rem">Förslagen är anpassade efter ditt mål på ${kcalTxt(T.kcal)} kcal. Tryck för att lägga till en måltid i dagboken.</p>${scaledPlan().map((ml,i)=>`<div class="sug"><div class="sug-h"><b>${mealName(ml.role,tr)}</b><span>${ml.kcal} kcal · ${ml.p} g protein</span></div><p class="small">${ml.foods.map(f=>`${escH(f.n)} ${fmtAmt(f.amt)} ${f.unit}`).join(', ')}</p><button class="btn sec sm" onclick="addPlan(${i})">${IC.plus}Lägg till i ${SLOTN[roleSlot(ml.role)].toLowerCase()}</button></div>`).join('')}</div></details>
-      <details ${aiMsg||aiBusy?'open':''}><summary>Fråga Claude om maten</summary><div>
-        <p style="color:var(--ink2)">Claude ser vad du ätit och gör om förslagen för resten av dagen.</p>
+      <details ${aiMsg||aiBusy?'open':''}><summary>Fråga Gemini om maten</summary><div>
+        <p style="color:var(--ink2)">Gemini ser vad du ätit och gör om förslagen för resten av dagen.</p>
         <textarea class="inp" id="ai-wish" style="margin-top:.7rem" placeholder="Till exempel: har bara ägg, tonfisk och pasta hemma…"></textarea>
-        <button class="btn pri full" style="margin-top:.7rem" ${aiBusy?'disabled':''} onclick="balanceDay()">${aiBusy?'Claude tänker…':'Gör nya förslag för resten av dagen'}</button>
-        <div class="row" style="margin-top:.5rem"><button class="btn sec" ${aiBusy?'disabled':''} onclick="askClaude()">Ny standardplan</button><button class="btn sec" onclick="resetPlan()">Grundplanen</button></div>
+        <button class="btn pri full" style="margin-top:.7rem" ${aiBusy?'disabled':''} onclick="balanceDay()">${aiBusy?'Gemini tänker…':'Gör nya förslag för resten av dagen'}</button>
+        <div class="row" style="margin-top:.5rem"><button class="btn sec" ${aiBusy?'disabled':''} onclick="askAI()">Ny standardplan</button><button class="btn sec" onclick="resetPlan()">Grundplanen</button></div>
         ${aiMsg?`<div class="note ok">${escH(aiMsg)}</div>`:''}</div></details>
       <details><summary>Mitt skafferi (${S.pantry.length})</summary><div>
-        <p style="color:var(--ink2)">Varor du har skannat. Claude använder dem i första hand.</p>
+        <p style="color:var(--ink2)">Varor du har skannat. Gemini använder dem i första hand.</p>
         ${S.pantry.map((x,i)=>`<div class="entry"><span>${escH(x.n)}<br><span class="small">${Math.round(x.kU*100)} kcal · ${fmt1(x.pU*100)} g protein per 100 g</span></span><button class="x" aria-label="Ta bort ${escH(x.n)}" onclick="S.pantry.splice(${i},1);save();render()">✕</button></div>`).join('')}
         <button class="btn sec full" style="margin-top:.7rem" onclick="pantryScan()">${IC.scan}Skanna in en vara</button></div></details>
       <details><summary>Bra att veta</summary><div><ul class="tips">
@@ -2470,7 +2476,7 @@ function renderFD(){
       <div class="sh-btns"><button class="pri" onclick="fdQuick()">${ed?'Spara':'Lägg till i '+SLOTN[FD.slot].toLowerCase()}</button>${ed?'<button class="danger" onclick="fdDel()">Ta bort</button>':''}</div>`;
   }else if(FD.mode==='manual'){
     body=`<div class="note">${FD.name?`${escH(FD.name)} saknar näringsvärde i databasen.`:`Varan${FD.code?` (${escH(FD.code)})`:''} finns inte i databasen.`} Fotografera näringsvärdet eller skriv av det från förpackningen – det sparas så att du slipper nästa gång.</div>
-      <button class="btn sec full" id="m-photo-btn" style="margin-top:.7rem" ${FD.photoBusy?'disabled':''} onclick="document.getElementById('m-photo').click()">${IC.scan}${FD.photoBusy?'Claude läser av…':'Fotografera näringsvärdet'}</button>
+      <button class="btn sec full" id="m-photo-btn" style="margin-top:.7rem" ${FD.photoBusy?'disabled':''} onclick="document.getElementById('m-photo').click()">${IC.scan}${FD.photoBusy?'Gemini läser av…':'Fotografera näringsvärdet'}</button>
       <input type="file" id="m-photo" accept="image/*" capture="environment" style="display:none" onchange="fdPhoto(this.files[0])">
       <label class="st-lbl" for="m-n"><span>Namn</span></label><input id="m-n" class="inp" value="${escH(FD.name||'')}" placeholder="T.ex. Proteinpudding vanilj">
       <div class="kick" style="margin-top:1rem">Per 100 g</div>
@@ -2493,7 +2499,7 @@ function renderFD(){
   s.innerHTML=`<div class="sh-grip"></div><div class="sh-top"><div><div class="sh-t">${ed?'Ändra':'Lägg till mat'}</div></div><button class="sh-x" onclick="closeSheet()">Stäng</button></div>${slots}${tabs}<div class="fd-body">${body}</div>`;
 }
 
-/* ─── Fotografera näringsvärdet: Claude läser av tabellen (eller uppskattar en måltid) ─── */
+/* ─── Fotografera näringsvärdet: Gemini läser av tabellen (eller uppskattar en måltid) ─── */
 function shrinkImage(file){return new Promise((res,rej)=>{
   const img=new Image(),url=URL.createObjectURL(file);
   img.onload=()=>{const k=Math.min(1,1568/Math.max(img.width,img.height)),c=document.createElement('canvas');
@@ -2525,20 +2531,8 @@ const LABEL_SCHEMA={type:'object',additionalProperties:false,properties:{
   salt_g:numOrNull('Salt i gram, om det framgår.'),
   confidence_score:{type:'number',description:'Hur säker avläsningen/uppskattningen är mellan 0.0 och 1.0.'}},
   required:['is_valid_food','product_name','basis','serving_size_g','calories_kcal','protein_g','carbs_g','sugar_g','fat_g','saturated_fat_g','salt_g','confidence_score']};
-async function claudeLabel(b64){
-  const headers={'Content-Type':'application/json','x-api-key':S.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
-  const body={model:'claude-opus-5-5',max_tokens:4000,system:LABEL_SYSTEM,
-    output_config:{effort:'low',format:{type:'json_schema',schema:LABEL_SCHEMA}},
-    messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},{type:'text',text:'Läs av näringsvärdet i bilden.'}]}]};
-  const send=b=>fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:b.fallbacks?{...headers,'anthropic-beta':'server-side-fallback-2026-07-01'}:headers,body:JSON.stringify(b)});
-  let res;
-  try{res=await send({...body,fallbacks:'default'});if(res.status===400)res=await send(body)}
-  catch(e){throw new Error('Kunde inte nå Claude. Kontrollera nätet.')}
-  if(!res.ok)throw new Error(res.status===401?'Ogiltig API-nyckel.':'Claude svarade med fel '+res.status+'.');
-  const data=await res.json();
-  if(data.stop_reason==='refusal')throw new Error('Claude kunde inte läsa bilden. Skriv av värdena själv.');
-  if(data.stop_reason==='max_tokens')throw new Error('Svaret blev avbrutet. Försök igen.');
-  const j=JSON.parse((data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join(''));
+async function aiLabel(b64){
+  const j=JSON.parse(await callAI('Läs av näringsvärdet i bilden.',{system:LABEL_SYSTEM,schema:LABEL_SCHEMA,parts:[{inlineData:{mimeType:'image/jpeg',data:b64}}]}));
   if(!j.is_valid_food)throw new Error('Hittade ingen näringsinformation i bilden. Ta en skarpare bild.');
   return j;
 }
@@ -2549,15 +2543,15 @@ function labelTo100(j){
 }
 async function fdPhoto(file){
   if(!file||!FD)return;
-  if(!S.apiKey){toast('Lägg in din API-nyckel under Inställningar först');return}
-  const b=document.getElementById('m-photo-btn');FD.photoBusy=true;if(b){b.disabled=true;b.textContent='Claude läser av…'}
+  if(!S.geminiKey){toast('Lägg in en gratis Gemini-nyckel under Inställningar → Mer inställningar');return}
+  const b=document.getElementById('m-photo-btn');FD.photoBusy=true;if(b){b.disabled=true;b.textContent='Gemini läser av…'}
   try{
-    const j=await claudeLabel(await shrinkImage(file)),v=labelTo100(j);
+    const j=await aiLabel(await shrinkImage(file)),v=labelTo100(j);
     const set=(id,x)=>{const el=document.getElementById(id);if(el&&isFinite(x))el.value=Math.round(x*10)/10};
     set('m-k',v.k);set('m-p',v.p);set('m-c',v.c);set('m-f',v.f);set('m-g',v.g);
     const n=document.getElementById('m-n');if(n&&!n.value.trim()&&j.product_name)n.value=j.product_name;
     toast(j.confidence_score<.6||v.guess?'Osäker avläsning – kontrollera siffrorna noga':j.basis==='per_serving'?'Uppskattat från bilden – kontrollera siffrorna':'Näringsvärdet är ifyllt – kontrollera siffrorna');
-  }catch(e){toast(e instanceof SyntaxError?'Claude kunde inte läsa tabellen. Försök igen.':e.message)}
+  }catch(e){toast(e instanceof SyntaxError?'Gemini kunde inte läsa tabellen. Försök igen.':e.message)}
   FD.photoBusy=false;if(b){b.disabled=false;b.innerHTML=IC.scan+'Fotografera näringsvärdet'}
   const inp=document.getElementById('m-photo');if(inp)inp.value='';
 }
@@ -2678,8 +2672,8 @@ function viewSettings(){
     <div class="list school" style="margin-top:2rem"><details><summary>Mer inställningar</summary><div>
       <div class="set" style="padding-top:0;border-top:none"><button class="switch" role="switch" aria-checked="${!!S.voice}" onclick="S.voice=!S.voice;save();render()"><span><span class="set-t">Läs upp instruktionerna</span><p>Telefonen säger vad du ska göra under passet.</p></span><i></i></button></div>
       <div class="set"><label for="s-st">Programmet startade</label><p>Styr vilken vecka av 8 du är på.</p><input class="inp" id="s-st" type="date" value="${S.start}" onchange="if(this.value){S.start=mondayOf(parseD(this.value));save();render()}"></div>
-      <div class="set"><label for="s-key">Claude API-nyckel</label><p>Behövs för Claude-knapparna. Sparas bara på din telefon.</p>
-        <input class="inp" id="s-key" type="password" value="${S.apiKey||''}" placeholder="sk-ant-…" onchange="S.apiKey=this.value.trim();save();toast('Nyckeln är sparad')"></div>
+      <div class="set"><label for="s-key">Gemini API-nyckel</label><p>Gratis från Google AI Studio (aistudio.google.com → Get API key). Behövs för kostförslag, coachen och fotot av näringsvärdet. Sparas bara på din telefon.</p>
+        <input class="inp" id="s-key" type="password" value="${escH(S.geminiKey||'')}" placeholder="AIza…" autocomplete="off" onchange="S.geminiKey=this.value.trim();save();toast('Nyckeln är sparad')"></div>
       <div class="set"><button class="btn sec full" onclick="openGuide()">Visa guiden igen</button>
         <button class="btn sec full danger" style="margin-top:.6rem" onclick="resetAll()">Rensa all data</button></div>
     </div></details></div>`;
