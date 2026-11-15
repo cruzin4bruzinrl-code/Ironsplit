@@ -711,6 +711,7 @@ html[data-size=xstor] .big b{font-size:2.6rem}
 <div class="sheet-bg" id="dlg-bg" onclick="if(event.target===this)closeDlg()"><div class="sheet" id="dlg" role="dialog" aria-modal="true"></div></div>
 <div class="scan" id="scan"><video id="scan-v" playsinline muted></video><div class="scan-box"><i></i></div>
   <div class="scan-ui"><div class="scan-msg" id="scan-msg">Startar kameran…</div>
+  <button class="scan-close" id="scan-torch" hidden aria-pressed="false" onclick="setTorch(!scanTorch)">Släck lampan</button>
   <div class="scan-row"><input id="scan-code" type="number" inputmode="numeric" placeholder="Eller skriv streckkoden" aria-label="Streckkod"><button onclick="manualCode()">Sök</button></div>
   <button class="scan-close" onclick="stopScan()">Avbryt</button></div></div>
 <script>
@@ -1158,7 +1159,8 @@ function fromOFF(p,code){
 async function lookupCode(code){
   const r=await fetch(`https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=code,product_name,product_name_sv,brands,nutriments,serving_quantity`);
   const j=await r.json();
-  return j.status===1&&j.product?fromOFF(j.product,code):null;
+  if(j.status!==1||!j.product)return{prod:null,name:''};
+  return{prod:fromOFF(j.product,code),name:(j.product.product_name_sv||j.product.product_name||'').trim()};
 }
 async function searchOFF(q){
   const r=await fetch(`https://se.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=12&fields=code,product_name,product_name_sv,brands,nutriments,serving_quantity`);
@@ -1166,33 +1168,119 @@ async function searchOFF(q){
   return (j.products||[]).map(p=>fromOFF(p,p.code)).filter(Boolean);
 }
 
-/* ═════════ SKANNER ═════════ */
-let scanStream=null,scanCb=null,scanOn=false,detector=null;
+/* ═════════ SKANNER ═════════
+   Kameran: 1920×1080, autofokus, 2× zoom och ficklampa när telefonen stöder det.
+   En kod godkänns först när den lästs likadant två gånger i rad och kontrollsiffran stämmer. */
+let scanStream=null,scanCb=null,scanOn=false,detector=null,zxReader=null,scanLast='',scanTorch=false;
+const SCAN_TIP='Håll streckkoden inom rutan, 15–20 cm bort';
+/* Kontrollsiffra för EAN-8, UPC-A (12) och EAN-13 */
+function gtinOk(c){
+  if(!/^\d+$/.test(c)||![8,12,13,14].includes(c.length))return false;
+  let s=0;const d=c.slice(0,-1);for(let i=0;i<d.length;i++)s+=(+d[d.length-1-i])*(i%2===0?3:1);
+  return (10-s%10)%10===+c.slice(-1);
+}
+/* UPC-E (8 siffror) → UPC-A (12 siffror) */
+function upcE2A(c){
+  if(!/^[01]\d{7}$/.test(c))return null;
+  const n=c[0],d=c.slice(1,7),k=c[7],l=d[5];let m;
+  if(l<='2')m=d[0]+d[1]+l+'0000'+d[2]+d[3]+d[4];
+  else if(l==='3')m=d[0]+d[1]+d[2]+'00000'+d[3]+d[4];
+  else if(l==='4')m=d[0]+d[1]+d[2]+d[3]+'00000'+d[4];
+  else m=d.slice(0,5)+'0000'+l;
+  return n+m+k;
+}
+function codeOk(c){c=String(c||'').replace(/\D/g,'');return gtinOk(c)||(c.length===8&&!!upcE2A(c)&&gtinOk(upcE2A(c)))}
+/* Alla varianter av samma kod: 12- och 13-siffrig (och UPC-E utskriven) */
+function codeVariants(c){
+  c=String(c||'').replace(/\D/g,'');const out=[c];
+  if(c.length===8){const a=upcE2A(c);if(a&&gtinOk(a))out.push(a)}
+  out.slice().forEach(x=>{if(x.length===12)out.push('0'+x);if(x.length===13&&x[0]==='0')out.push(x.slice(1))});
+  return [...new Set(out)];
+}
+const codeKey=c=>{const v=codeVariants(c).find(x=>x.length>=12);return v?v.padStart(13,'0'):String(c||'').replace(/\D/g,'')};
+/* Egna varor först: skafferi och senaste */
+function localCode(code){
+  const k=codeKey(code);
+  return [...(S.pantry||[]),...(S.recent||[])].find(x=>x.code&&codeKey(x.code)===k)||null;
+}
 async function startScan(cb){
-  scanCb=cb;const el=document.getElementById('scan'),msg=document.getElementById('scan-msg');
-  document.getElementById('scan-code').value='';el.classList.add('show');
-  if(!('BarcodeDetector' in window)){msg.textContent='Kameraskanning stöds inte här. Skriv siffrorna under streckkoden.';return}
+  scanCb=cb;scanLast='';scanTorch=false;
+  const el=document.getElementById('scan'),msg=document.getElementById('scan-msg'),v=document.getElementById('scan-v');
+  document.getElementById('scan-code').value='';document.getElementById('scan-torch').hidden=true;
+  el.classList.add('show');msg.textContent='Startar kameran…';
   try{
-    detector=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e']});
-    scanStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-    const v=document.getElementById('scan-v');v.srcObject=scanStream;await v.play();
-    msg.textContent='Håll streckkoden inom rutan';scanOn=true;scanLoop();
-  }catch(e){msg.textContent='Kameran gick inte att starta. Tillåt kameran eller skriv streckkoden.'}
+    scanStream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080},advanced:[{focusMode:'continuous'}]}});
+  }catch(e){
+    try{scanStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}})}
+    catch(e2){msg.textContent='Kameran gick inte att starta. Tillåt kameran eller skriv siffrorna under streckkoden.';return}
+  }
+  await tuneCamera();
+  v.srcObject=scanStream;try{await v.play()}catch(e){}
+  scanOn=true;msg.textContent=SCAN_TIP;
+  if('BarcodeDetector' in window){
+    try{detector=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e']});scanLoop();return}catch(e){detector=null}
+  }
+  try{
+    await loadZX();
+    const hints=new Map();hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.EAN_8,ZXing.BarcodeFormat.UPC_A,ZXing.BarcodeFormat.UPC_E]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+    zxReader=new ZXing.BrowserMultiFormatReader(hints,150);
+    await zxReader.decodeFromStream(scanStream,v,r=>{if(r)onRead(r.getText())});
+  }catch(e){if(scanOn)msg.textContent='Kameraskanning fungerar inte här. Skriv siffrorna under streckkoden.'}
+}
+/* Autofokus, 2× zoom och ficklampa – bara det kameran faktiskt klarar */
+async function tuneCamera(){
+  const t=scanStream&&scanStream.getVideoTracks()[0];if(!t||!t.getCapabilities)return;
+  let cap={};try{cap=t.getCapabilities()}catch(e){}
+  const adv={};
+  if((cap.focusMode||[]).includes('continuous'))adv.focusMode='continuous';
+  if(cap.zoom&&cap.zoom.max>=1)adv.zoom=Math.max(cap.zoom.min||1,Math.min(2,cap.zoom.max));
+  if(Object.keys(adv).length){try{await t.applyConstraints({advanced:[adv]})}catch(e){}}
+  if(cap.torch){document.getElementById('scan-torch').hidden=false;await setTorch(true)}
+}
+async function setTorch(on){
+  const t=scanStream&&scanStream.getVideoTracks()[0];if(!t)return;
+  try{await t.applyConstraints({advanced:[{torch:on}]});scanTorch=on}catch(e){scanTorch=false}
+  const b=document.getElementById('scan-torch');b.textContent=scanTorch?'Släck lampan':'Tänd lampan';b.setAttribute('aria-pressed',scanTorch);
 }
 async function scanLoop(){
-  if(!scanOn)return;
-  try{const c=await detector.detect(document.getElementById('scan-v'));if(c.length){scanOn=false;navigator.vibrate&&navigator.vibrate(60);return gotCode(c[0].rawValue)}}catch(e){}
-  setTimeout(scanLoop,200);
+  if(!scanOn||!detector)return;
+  try{const c=await detector.detect(document.getElementById('scan-v'));if(c.length)onRead(c[0].rawValue)}catch(e){}
+  if(scanOn)setTimeout(scanLoop,120);
 }
-function manualCode(){const c=document.getElementById('scan-code').value.trim();if(c.length<6){toast('Skriv hela streckkoden');return}scanOn=false;gotCode(c)}
+/* Godkänn först när samma giltiga kod lästs två gånger i rad */
+function onRead(raw){
+  if(!scanOn)return;const c=String(raw||'').replace(/\D/g,'');
+  if(!codeOk(c)){scanLast='';return}
+  if(c!==scanLast){scanLast=c;return}
+  scanOn=false;navigator.vibrate&&navigator.vibrate(60);gotCode(c);
+}
+function manualCode(){
+  const c=document.getElementById('scan-code').value.replace(/\D/g,'');
+  if(c.length<8){toast('Skriv hela streckkoden');return}
+  if(!codeOk(c)){toast('Siffrorna stämmer inte – kontrollera koden');return}
+  scanOn=false;gotCode(c);
+}
 async function gotCode(code){
   document.getElementById('scan-msg').textContent='Hämtar innehållet…';
-  let prod=null;try{prod=await lookupCode(code)}catch(e){}
+  let prod=localCode(code),name='';
+  if(prod)prod={...prod,code:prod.code||code};
+  else{
+    for(const v of codeVariants(code)){
+      try{const r=await lookupCode(v);if(r.prod){prod=r.prod;break}if(r.name&&!name)name=r.name}catch(e){}
+    }
+    if(prod)addToPantry(prod);
+  }
   stopScan();
-  if(prod){addToPantry(prod);scanCb&&scanCb(prod)}
-  else{toast('Varan hittades inte – fyll i näringsvärdet själv');scanCb&&scanCb(null,code)}
+  if(prod){scanCb&&scanCb(prod,code)}
+  else{toast(name?'Näringsvärde saknas – fyll i eller fotografera det':'Varan hittades inte – fyll i eller fotografera näringsvärdet');scanCb&&scanCb(null,code,name)}
 }
-function stopScan(){scanOn=false;if(scanStream){scanStream.getTracks().forEach(t=>t.stop());scanStream=null}document.getElementById('scan').classList.remove('show')}
+function stopScan(){
+  scanOn=false;detector=null;
+  if(zxReader){try{zxReader.reset()}catch(e){}zxReader=null}
+  if(scanStream){scanStream.getTracks().forEach(t=>t.stop());scanStream=null}
+  document.getElementById('scan').classList.remove('show');
+}
 
 /* ═════════ MÅLTIDSREDIGERARE ═════════ */
 let ED=null;
@@ -2296,7 +2384,7 @@ function closeSheet(){document.getElementById('sheet-bg').classList.remove('show
 function openAdd(slot,mode){FD={slot:slot||defaultSlot(),mode:mode||'search',q:'',online:[],busy:false,list:[]};showSheet();setTimeout(()=>{const q=document.getElementById('fd-q');q&&q.focus()},150)}
 function openScan(slot){
   const sl=slot||(FD&&FD.slot)||defaultSlot();closeSheet();
-  startScan((prod,code)=>{FD=prod?{slot:sl,mode:'portion',item:itemOf(prod),amt:prod.def||100}:{slot:sl,mode:'manual',code:code||''};showSheet()});
+  startScan((prod,code,name)=>{FD=prod?{slot:sl,mode:'portion',item:itemOf(prod),amt:prod.def||100}:{slot:sl,mode:'manual',code:code||'',name:name||''};showSheet()});
 }
 function openEntry(i){
   const x=dayFood()[i];if(!x)return;
@@ -2381,8 +2469,10 @@ function renderFD(){
       <label><span>Fett</span><div class="field"><input id="q-f" type="number" inputmode="numeric" value="${v.f||''}" placeholder="0"><em>g</em></div></label></div>
       <div class="sh-btns"><button class="pri" onclick="fdQuick()">${ed?'Spara':'Lägg till i '+SLOTN[FD.slot].toLowerCase()}</button>${ed?'<button class="danger" onclick="fdDel()">Ta bort</button>':''}</div>`;
   }else if(FD.mode==='manual'){
-    body=`<div class="note">Varan${FD.code?` (${escH(FD.code)})`:''} finns inte i databasen. Skriv av näringsvärdet från förpackningen – det sparas så att du slipper nästa gång.</div>
-      <label class="st-lbl" for="m-n"><span>Namn</span></label><input id="m-n" class="inp" placeholder="T.ex. Proteinpudding vanilj">
+    body=`<div class="note">${FD.name?`${escH(FD.name)} saknar näringsvärde i databasen.`:`Varan${FD.code?` (${escH(FD.code)})`:''} finns inte i databasen.`} Fotografera näringsvärdet eller skriv av det från förpackningen – det sparas så att du slipper nästa gång.</div>
+      <button class="btn sec full" id="m-photo-btn" style="margin-top:.7rem" ${FD.photoBusy?'disabled':''} onclick="document.getElementById('m-photo').click()">${IC.scan}${FD.photoBusy?'Claude läser av…':'Fotografera näringsvärdet'}</button>
+      <input type="file" id="m-photo" accept="image/*" capture="environment" style="display:none" onchange="fdPhoto(this.files[0])">
+      <label class="st-lbl" for="m-n"><span>Namn</span></label><input id="m-n" class="inp" value="${escH(FD.name||'')}" placeholder="T.ex. Proteinpudding vanilj">
       <div class="kick" style="margin-top:1rem">Per 100 g</div>
       <div class="q-grid"><label><span>Kalorier</span><div class="field"><input id="m-k" type="number" inputmode="decimal"><em>kcal</em></div></label>
       <label><span>Protein</span><div class="field"><input id="m-p" type="number" inputmode="decimal"><em>g</em></div></label>
@@ -2403,28 +2493,45 @@ function renderFD(){
   s.innerHTML=`<div class="sh-grip"></div><div class="sh-top"><div><div class="sh-t">${ed?'Ändra':'Lägg till mat'}</div></div><button class="sh-x" onclick="closeSheet()">Stäng</button></div>${slots}${tabs}<div class="fd-body">${body}</div>`;
 }
 
-/* ─── Streckkodsläsare: inbyggd i webbläsaren, annars ZXing som reserv ─── */
-let zxReader=null;
-function loadZX(){return new Promise((res,rej)=>{if(window.ZXing)return res();const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
-async function startScan(cb){
-  scanCb=cb;const el=document.getElementById('scan'),msg=document.getElementById('scan-msg');
-  document.getElementById('scan-code').value='';el.classList.add('show');msg.textContent='Startar kameran…';
-  const v=document.getElementById('scan-v');
-  if('BarcodeDetector' in window){
-    try{
-      detector=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e']});
-      scanStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-      v.srcObject=scanStream;await v.play();msg.textContent='Håll streckkoden inom rutan';scanOn=true;scanLoop();return;
-    }catch(e){if(scanStream){scanStream.getTracks().forEach(t=>t.stop());scanStream=null}}
-  }
-  try{
-    await loadZX();
-    const hints=new Map();hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.EAN_8,ZXing.BarcodeFormat.UPC_A,ZXing.BarcodeFormat.UPC_E]);
-    zxReader=new ZXing.BrowserMultiFormatReader(hints);scanOn=true;msg.textContent='Håll streckkoden inom rutan';
-    await zxReader.decodeFromConstraints({video:{facingMode:'environment'}},v,(r)=>{if(r&&scanOn){scanOn=false;navigator.vibrate&&navigator.vibrate(60);gotCode(r.getText())}});
-  }catch(e){msg.textContent='Kameran gick inte att starta här. Skriv siffrorna under streckkoden.'}
+/* ─── Fotografera näringsvärdet: Claude läser av tabellen per 100 g ─── */
+function shrinkImage(file){return new Promise((res,rej)=>{
+  const img=new Image(),url=URL.createObjectURL(file);
+  img.onload=()=>{const k=Math.min(1,1568/Math.max(img.width,img.height)),c=document.createElement('canvas');
+    c.width=Math.round(img.width*k);c.height=Math.round(img.height*k);c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+    URL.revokeObjectURL(url);res(c.toDataURL('image/jpeg',.85).split(',')[1])};
+  img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('Bilden gick inte att läsa.'))};img.src=url;
+})}
+async function claudeLabel(b64){
+  const headers={'Content-Type':'application/json','x-api-key':S.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
+  const body={model:'claude-opus-5-5',max_tokens:4000,output_config:{effort:'low'},messages:[{role:'user',content:[
+    {type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},
+    {type:'text',text:'Bilden visar näringsvärdet på en livsmedelsförpackning. Läs av värdena per 100 g (eller per 100 ml). Om bara energi i kJ finns, räkna om till kcal (dela med 4,184). Svara ENDAST med JSON i exakt detta format: {"name":"produktnamn om det syns, annars tom sträng","kcal":0,"protein":0,"carbs":0,"fat":0}. Om du inte hittar någon näringstabell, svara {"error":"kort förklaring på svenska"}.'}]}]};
+  const send=b=>fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:b.fallbacks?{...headers,'anthropic-beta':'server-side-fallback-2026-07-01'}:headers,body:JSON.stringify(b)});
+  let res;
+  try{res=await send({...body,fallbacks:'default'});if(res.status===400)res=await send(body)}
+  catch(e){throw new Error('Kunde inte nå Claude. Kontrollera nätet.')}
+  if(!res.ok)throw new Error(res.status===401?'Ogiltig API-nyckel.':'Claude svarade med fel '+res.status+'.');
+  const data=await res.json();
+  if(data.stop_reason==='refusal')throw new Error('Claude kunde inte läsa bilden. Skriv av värdena själv.');
+  const txt=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+  const j=JSON.parse(txt.slice(txt.indexOf('{'),txt.lastIndexOf('}')+1));
+  if(j.error)throw new Error(j.error);
+  return j;
 }
-function stopScan(){scanOn=false;if(zxReader){try{zxReader.reset()}catch(e){}zxReader=null}if(scanStream){scanStream.getTracks().forEach(t=>t.stop());scanStream=null}document.getElementById('scan').classList.remove('show')}
+async function fdPhoto(file){
+  if(!file||!FD)return;
+  if(!S.apiKey){toast('Lägg in din API-nyckel under Inställningar först');return}
+  const b=document.getElementById('m-photo-btn');FD.photoBusy=true;if(b){b.disabled=true;b.textContent='Claude läser av…'}
+  try{
+    const j=await claudeLabel(await shrinkImage(file)),set=(id,v)=>{const el=document.getElementById(id);if(el&&v!=null&&v!=='')el.value=Math.round((+v||0)*10)/10};
+    set('m-k',j.kcal);set('m-p',j.protein);set('m-c',j.carbs);set('m-f',j.fat);
+    const n=document.getElementById('m-n');if(n&&!n.value.trim()&&j.name)n.value=j.name;
+    toast('Näringsvärdet är ifyllt – kontrollera siffrorna');
+  }catch(e){toast(e instanceof SyntaxError?'Claude kunde inte läsa tabellen. Försök igen.':e.message)}
+  FD.photoBusy=false;if(b){b.disabled=false;b.innerHTML=IC.scan+'Fotografera näringsvärdet'}
+  const inp=document.getElementById('m-photo');if(inp)inp.value='';
+}
+function loadZX(){return new Promise((res,rej)=>{if(window.ZXing)return res();const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
 /* ═════════ KROPP ═════════ */
 let CH=null;
 function weightSeries(days){
