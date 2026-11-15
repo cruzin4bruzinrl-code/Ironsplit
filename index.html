@@ -2493,7 +2493,7 @@ function renderFD(){
   s.innerHTML=`<div class="sh-grip"></div><div class="sh-top"><div><div class="sh-t">${ed?'Ändra':'Lägg till mat'}</div></div><button class="sh-x" onclick="closeSheet()">Stäng</button></div>${slots}${tabs}<div class="fd-body">${body}</div>`;
 }
 
-/* ─── Fotografera näringsvärdet: Claude läser av tabellen per 100 g ─── */
+/* ─── Fotografera näringsvärdet: Claude läser av tabellen (eller uppskattar en måltid) ─── */
 function shrinkImage(file){return new Promise((res,rej)=>{
   const img=new Image(),url=URL.createObjectURL(file);
   img.onload=()=>{const k=Math.min(1,1568/Math.max(img.width,img.height)),c=document.createElement('canvas');
@@ -2501,11 +2501,35 @@ function shrinkImage(file){return new Promise((res,rej)=>{
     URL.revokeObjectURL(url);res(c.toDataURL('image/jpeg',.85).split(',')[1])};
   img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('Bilden gick inte att läsa.'))};img.src=url;
 })}
+const LABEL_SYSTEM=`Du är en exakt närings- och livsmedelsanalytiker i en kosthållningsapp.
+Din uppgift är att extrahera eller uppskatta näringsvärden utifrån användarens indata (bild på näringsdeklaration, bild på en måltid eller textbeskrivning).
+
+Regler:
+1. Prioritera alltid exakta siffror från en synlig näringsdeklaration (per 100 g eller per 100 ml).
+2. Om deklarationen visar både "per 100 g" och "per portion", använd värdena per 100 g/ml som bas, men ange portionsvikten i fältet serving_size_g om den framgår.
+3. Om indatan är en bild på lagad mat eller fritext utan tabell: identifiera livsmedlet, uppskatta en rimlig totalvikt i gram och räkna ut totalt näringsinnehåll för hela portionen (sätt då basis till "per_serving").
+4. Använd alltid svenska för produktnamn och eventuella anmärkningar.
+5. Om bilden är för suddig eller inte innehåller någon mat/näringsinfo alls, sätt is_valid_food till false och lämna värdena som 0.`;
+const numOrNull=d=>({anyOf:[{type:'number'},{type:'null'}],description:d});
+const LABEL_SCHEMA={type:'object',additionalProperties:false,properties:{
+  is_valid_food:{type:'boolean',description:'True om bilden eller texten föreställer mat, dryck eller en näringsdeklaration, annars false.'},
+  product_name:{type:'string',description:"Produktens namn på svenska, t.ex. 'Kvarg Naturell 0,2%' eller 'Kycklingfilé med ris'."},
+  basis:{type:'string',enum:['per_100g','per_100ml','per_serving'],description:'Vilken enhet näringsvärdena nedan avser.'},
+  serving_size_g:numOrNull('Uppskattad eller angiven portionsvikt i gram/ml. Null om okänt.'),
+  calories_kcal:{type:'number',description:'Energi i kilokalorier (kcal). Om endast kJ anges, räkna om (kJ / 4.184).'},
+  protein_g:{type:'number',description:'Protein i gram.'},
+  carbs_g:{type:'number',description:'Kolhydrater i gram.'},
+  sugar_g:numOrNull('Varav sockerarter i gram, om det framgår.'),
+  fat_g:{type:'number',description:'Fett i gram.'},
+  saturated_fat_g:numOrNull('Varav mättat fett i gram, om det framgår.'),
+  salt_g:numOrNull('Salt i gram, om det framgår.'),
+  confidence_score:{type:'number',description:'Hur säker avläsningen/uppskattningen är mellan 0.0 och 1.0.'}},
+  required:['is_valid_food','product_name','basis','serving_size_g','calories_kcal','protein_g','carbs_g','sugar_g','fat_g','saturated_fat_g','salt_g','confidence_score']};
 async function claudeLabel(b64){
   const headers={'Content-Type':'application/json','x-api-key':S.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
-  const body={model:'claude-opus-5-5',max_tokens:4000,output_config:{effort:'low'},messages:[{role:'user',content:[
-    {type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},
-    {type:'text',text:'Bilden visar näringsvärdet på en livsmedelsförpackning. Läs av värdena per 100 g (eller per 100 ml). Om bara energi i kJ finns, räkna om till kcal (dela med 4,184). Svara ENDAST med JSON i exakt detta format: {"name":"produktnamn om det syns, annars tom sträng","kcal":0,"protein":0,"carbs":0,"fat":0}. Om du inte hittar någon näringstabell, svara {"error":"kort förklaring på svenska"}.'}]}]};
+  const body={model:'claude-opus-5-5',max_tokens:4000,system:LABEL_SYSTEM,
+    output_config:{effort:'low',format:{type:'json_schema',schema:LABEL_SCHEMA}},
+    messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},{type:'text',text:'Läs av näringsvärdet i bilden.'}]}]};
   const send=b=>fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:b.fallbacks?{...headers,'anthropic-beta':'server-side-fallback-2026-07-01'}:headers,body:JSON.stringify(b)});
   let res;
   try{res=await send({...body,fallbacks:'default'});if(res.status===400)res=await send(body)}
@@ -2513,20 +2537,26 @@ async function claudeLabel(b64){
   if(!res.ok)throw new Error(res.status===401?'Ogiltig API-nyckel.':'Claude svarade med fel '+res.status+'.');
   const data=await res.json();
   if(data.stop_reason==='refusal')throw new Error('Claude kunde inte läsa bilden. Skriv av värdena själv.');
-  const txt=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
-  const j=JSON.parse(txt.slice(txt.indexOf('{'),txt.lastIndexOf('}')+1));
-  if(j.error)throw new Error(j.error);
+  if(data.stop_reason==='max_tokens')throw new Error('Svaret blev avbrutet. Försök igen.');
+  const j=JSON.parse((data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join(''));
+  if(!j.is_valid_food)throw new Error('Hittade ingen näringsinformation i bilden. Ta en skarpare bild.');
   return j;
+}
+/* Gör om svaret till per 100 g och portionsstorlek för formuläret */
+function labelTo100(j){
+  const sv=+j.serving_size_g>0?+j.serving_size_g:null,k=j.basis==='per_serving'&&sv?100/sv:1;
+  return{k:j.calories_kcal*k,p:j.protein_g*k,c:j.carbs_g*k,f:j.fat_g*k,g:sv||100,guess:j.basis==='per_serving'&&!sv};
 }
 async function fdPhoto(file){
   if(!file||!FD)return;
   if(!S.apiKey){toast('Lägg in din API-nyckel under Inställningar först');return}
   const b=document.getElementById('m-photo-btn');FD.photoBusy=true;if(b){b.disabled=true;b.textContent='Claude läser av…'}
   try{
-    const j=await claudeLabel(await shrinkImage(file)),set=(id,v)=>{const el=document.getElementById(id);if(el&&v!=null&&v!=='')el.value=Math.round((+v||0)*10)/10};
-    set('m-k',j.kcal);set('m-p',j.protein);set('m-c',j.carbs);set('m-f',j.fat);
-    const n=document.getElementById('m-n');if(n&&!n.value.trim()&&j.name)n.value=j.name;
-    toast('Näringsvärdet är ifyllt – kontrollera siffrorna');
+    const j=await claudeLabel(await shrinkImage(file)),v=labelTo100(j);
+    const set=(id,x)=>{const el=document.getElementById(id);if(el&&isFinite(x))el.value=Math.round(x*10)/10};
+    set('m-k',v.k);set('m-p',v.p);set('m-c',v.c);set('m-f',v.f);set('m-g',v.g);
+    const n=document.getElementById('m-n');if(n&&!n.value.trim()&&j.product_name)n.value=j.product_name;
+    toast(j.confidence_score<.6||v.guess?'Osäker avläsning – kontrollera siffrorna noga':j.basis==='per_serving'?'Uppskattat från bilden – kontrollera siffrorna':'Näringsvärdet är ifyllt – kontrollera siffrorna');
   }catch(e){toast(e instanceof SyntaxError?'Claude kunde inte läsa tabellen. Försök igen.':e.message)}
   FD.photoBusy=false;if(b){b.disabled=false;b.innerHTML=IC.scan+'Fotografera näringsvärdet'}
   const inp=document.getElementById('m-photo');if(inp)inp.value='';
