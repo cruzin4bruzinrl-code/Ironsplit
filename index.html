@@ -288,9 +288,27 @@ table.tbl{width:100%;border-collapse:collapse;margin-top:.5rem;font-variant-nume
 /* Skanner */
 .scan{position:fixed;inset:0;z-index:95;background:#000;display:none;flex-direction:column}
 .scan.show{display:flex}
-.scan video{flex:1;width:100%;object-fit:cover}
-.scan-box{position:absolute;left:50%;top:40%;transform:translate(-50%,-50%);width:80%;max-width:360px;height:11rem;border:3px solid #fff;border-radius:1.2rem;box-shadow:0 0 0 2000px rgba(0,0,0,.45)}
-.scan-box i{position:absolute;left:6%;right:6%;height:2px;background:#fff;top:50%}
+.scan video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+/* Flytande skanningsanimation: en vätskeyta som böljar upp och ner i rutan */
+.scan-box{--lq:#5ee7ff;position:absolute;left:50%;top:40%;transform:translate(-50%,-50%);width:80%;max-width:360px;height:11rem;border-radius:1.4rem;overflow:hidden;box-shadow:0 0 0 2000px rgba(0,0,0,.5);transition:transform .35s cubic-bezier(.2,1.6,.4,1)}
+.scan-box .cn{position:absolute;inset:0;border-radius:inherit;border:3px solid rgba(255,255,255,.9);animation:cnp 2.4s ease-in-out infinite}
+.liq{position:absolute;inset:0;animation:sweep 2.6s cubic-bezier(.45,0,.55,1) infinite alternate}
+.liq b{position:absolute;left:0;right:0;top:0;height:1.6rem;background:linear-gradient(var(--lq) 35%,color-mix(in srgb,var(--lq) 22%,transparent));opacity:.85;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 24' preserveAspectRatio='none'%3E%3Cpath d='M0 12 C20 2 40 2 60 12 S100 22 120 12 V24 H0Z'/%3E%3C/svg%3E") repeat-x 0 0/9rem 100%;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 24' preserveAspectRatio='none'%3E%3Cpath d='M0 12 C20 2 40 2 60 12 S100 22 120 12 V24 H0Z'/%3E%3C/svg%3E") repeat-x 0 0/9rem 100%;animation:flow 1.8s linear infinite;filter:drop-shadow(0 0 8px var(--lq));transition:background .3s}
+.liq b+b{top:.25rem;opacity:.35;-webkit-mask-size:6.5rem 100%;mask-size:6.5rem 100%;animation-duration:2.6s;animation-direction:reverse}
+.liq::after{content:'';position:absolute;left:0;right:0;top:calc(1.6rem - 1px);height:200%;background:linear-gradient(color-mix(in srgb,var(--lq) 19%,transparent),transparent 35%);transition:background .3s}
+.ok-mark{position:absolute;left:50%;top:50%;width:3.6rem;height:3.6rem;margin:-1.8rem 0 0 -1.8rem;fill:none;stroke:#fff;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:24;stroke-dashoffset:24;opacity:0}
+@keyframes sweep{from{transform:translateY(78%)}to{transform:translateY(-12%)}}
+@keyframes flow{to{-webkit-mask-position:9rem 0;mask-position:9rem 0}}
+@keyframes cnp{50%{border-color:rgba(94,231,255,.9);box-shadow:inset 0 0 18px rgba(94,231,255,.35)}}
+@keyframes fillup{to{transform:translateY(-45%)}}
+@keyframes tick{to{stroke-dashoffset:0;opacity:1}}
+.scan.seen .scan-box{--lq:#b9f6ff}
+.scan.seen .liq{animation-duration:.9s}
+.scan.ok .scan-box{--lq:#3ddc84;transform:translate(-50%,-50%) scale(1.04)}
+.scan.ok .liq{animation:fillup .5s cubic-bezier(.3,.7,.3,1) forwards}
+.scan.ok .scan-box .cn{animation:none;border-color:#3ddc84}
+.scan.ok .ok-mark{animation:tick .35s .25s ease-out forwards}
+@media (prefers-reduced-motion:reduce){.liq,.liq b,.scan-box .cn{animation:none}.liq{transform:translateY(45%)}}
 .scan-ui{position:absolute;left:1rem;right:1rem;bottom:calc(1.2rem + env(safe-area-inset-bottom,0px));display:grid;gap:.6rem}
 .scan-msg{text-align:center;color:#fff;background:rgba(0,0,0,.6);padding:.8rem;border-radius:.9rem;font-size:1.05rem}
 .scan-row{display:grid;grid-template-columns:1fr auto;gap:.5rem}
@@ -709,7 +727,7 @@ html[data-size=xstor] .big b{font-size:2.6rem}
 <div class="coach-ov" id="coach" role="dialog" aria-modal="true" aria-label="Tränarläge"></div>
 <div class="sheet-bg" id="sheet-bg" onclick="if(event.target===this)closeSheet()"><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
 <div class="sheet-bg" id="dlg-bg" onclick="if(event.target===this)closeDlg()"><div class="sheet" id="dlg" role="dialog" aria-modal="true"></div></div>
-<div class="scan" id="scan"><video id="scan-v" playsinline muted></video><div class="scan-box"><i></i></div>
+<div class="scan" id="scan"><video id="scan-v" playsinline muted autoplay></video><div class="scan-box" aria-hidden="true"><div class="liq"><b></b><b></b></div><span class="cn"></span><svg class="ok-mark" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
   <div class="scan-ui"><div class="scan-msg" id="scan-msg">Startar kameran…</div>
   <button class="scan-close" id="scan-torch" hidden aria-pressed="false" onclick="setTorch(!scanTorch)">Släck lampan</button>
   <div class="scan-row"><input id="scan-code" type="number" inputmode="numeric" placeholder="Eller skriv streckkoden" aria-label="Streckkod"><button onclick="manualCode()">Sök</button></div>
@@ -1167,7 +1185,7 @@ async function searchOFF(q){
 /* ═════════ SKANNER ═════════
    Kameran: 1920×1080, autofokus, 2× zoom och ficklampa när telefonen stöder det.
    En kod godkänns först när den lästs likadant två gånger i rad och kontrollsiffran stämmer. */
-let scanStream=null,scanCb=null,scanOn=false,detector=null,zxReader=null,scanLast='',scanTorch=false;
+let scanStream=null,scanCb=null,scanOn=false,detector=null,zxReader=null,zxCanvas=null,scanLast='',scanTorch=false,scanTick=0;
 const SCAN_TIP='Håll streckkoden inom rutan, 15–20 cm bort';
 /* Kontrollsiffra för EAN-8, UPC-A (12) och EAN-13 */
 function gtinOk(c){
@@ -1200,10 +1218,10 @@ function localCode(code){
   return [...(S.pantry||[]),...(S.recent||[])].find(x=>x.code&&codeKey(x.code)===k)||null;
 }
 async function startScan(cb){
-  scanCb=cb;scanLast='';scanTorch=false;
+  scanCb=cb;scanLast='';scanTorch=false;scanTick=0;
   const el=document.getElementById('scan'),msg=document.getElementById('scan-msg'),v=document.getElementById('scan-v');
   document.getElementById('scan-code').value='';document.getElementById('scan-torch').hidden=true;
-  el.classList.add('show');msg.textContent='Startar kameran…';
+  el.classList.remove('seen','ok');el.classList.add('show');msg.textContent='Startar kameran…';
   try{
     scanStream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080},advanced:[{focusMode:'continuous'}]}});
   }catch(e){
@@ -1212,17 +1230,53 @@ async function startScan(cb){
   }
   await tuneCamera();
   v.srcObject=scanStream;try{await v.play()}catch(e){}
-  scanOn=true;msg.textContent=SCAN_TIP;
+  /* Inbyggd läsare om den finns och klarar EAN, annars ZXing */
   if('BarcodeDetector' in window){
-    try{detector=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e']});scanLoop();return}catch(e){detector=null}
+    try{
+      const f=BarcodeDetector.getSupportedFormats?await BarcodeDetector.getSupportedFormats():['ean_13'];
+      const want=['ean_13','ean_8','upc_a','upc_e'].filter(x=>f.includes(x));
+      if(want.length)detector=new BarcodeDetector({formats:want});
+    }catch(e){detector=null}
   }
-  try{
-    await loadZX();
-    const hints=new Map();hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.EAN_8,ZXing.BarcodeFormat.UPC_A,ZXing.BarcodeFormat.UPC_E]);
-    hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
-    zxReader=new ZXing.BrowserMultiFormatReader(hints,150);
-    await zxReader.decodeFromStream(scanStream,v,r=>{if(r)onRead(r.getText())});
-  }catch(e){if(scanOn)msg.textContent='Kameraskanning fungerar inte här. Skriv siffrorna under streckkoden.'}
+  if(!detector){
+    try{
+      await loadZX();
+      const hints=new Map();hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.EAN_8,ZXing.BarcodeFormat.UPC_A,ZXing.BarcodeFormat.UPC_E]);
+      hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+      zxReader=new ZXing.MultiFormatReader();zxReader.setHints(hints);
+    }catch(e){msg.textContent='Kameraskanning fungerar inte här. Skriv siffrorna under streckkoden.';return}
+  }
+  scanOn=true;msg.textContent=SCAN_TIP;scanLoop();
+}
+/* Klipp ut det som syns i rutan (varannan gång ett bredare band) och skala ner – snabbare och säkrare */
+function scanCrop(v){
+  const vw=v.videoWidth,vh=v.videoHeight,er=v.getBoundingClientRect(),br=document.querySelector('.scan-box').getBoundingClientRect();
+  const k=Math.max(er.width/vw,er.height/vh),ox=er.left+(er.width-vw*k)/2,oy=er.top+(er.height-vh*k)/2;
+  let x,y,w,h;
+  if(scanTick%2===0){const pw=br.width*.15,ph=br.height*.3;x=(br.left-pw-ox)/k;y=(br.top-ph-oy)/k;w=(br.width+2*pw)/k;h=(br.height+2*ph)/k}
+  else{x=0;w=vw;h=vh*.5;y=((br.top+br.height/2-oy)/k)-h/2}
+  x=Math.max(0,x);y=Math.max(0,y);w=Math.min(vw-x,w);h=Math.min(vh-y,h);
+  if(!(w>20&&h>20)){x=0;y=vh*.25;w=vw;h=vh*.5}
+  const s=Math.min(1,960/w),c=zxCanvas||(zxCanvas=document.createElement('canvas'));
+  c.width=Math.round(w*s);c.height=Math.round(h*s);
+  c.getContext('2d',{willReadFrequently:true}).drawImage(v,x,y,w,h,0,0,c.width,c.height);
+  return c;
+}
+async function scanLoop(){
+  if(!scanOn)return;
+  const v=document.getElementById('scan-v');
+  if(v.readyState>=2&&v.videoWidth){
+    scanTick++;
+    try{
+      if(detector){const c=await detector.detect(v);if(c.length)onRead(c[0].rawValue)}
+      else if(zxReader){
+        const src=new ZXing.HTMLCanvasElementLuminanceSource(scanCrop(v));
+        let r=null;try{r=zxReader.decodeWithState(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(src)))}catch(e){}
+        if(r)onRead(r.getText());
+      }
+    }catch(e){}
+  }
+  if(scanOn)setTimeout(scanLoop,detector?90:40);
 }
 /* Autofokus, 2× zoom och ficklampa – bara det kameran faktiskt klarar */
 async function tuneCamera(){
@@ -1239,17 +1293,13 @@ async function setTorch(on){
   try{await t.applyConstraints({advanced:[{torch:on}]});scanTorch=on}catch(e){scanTorch=false}
   const b=document.getElementById('scan-torch');b.textContent=scanTorch?'Släck lampan':'Tänd lampan';b.setAttribute('aria-pressed',scanTorch);
 }
-async function scanLoop(){
-  if(!scanOn||!detector)return;
-  try{const c=await detector.detect(document.getElementById('scan-v'));if(c.length)onRead(c[0].rawValue)}catch(e){}
-  if(scanOn)setTimeout(scanLoop,120);
-}
 /* Godkänn först när samma giltiga kod lästs två gånger i rad */
 function onRead(raw){
   if(!scanOn)return;const c=String(raw||'').replace(/\D/g,'');
-  if(!codeOk(c)){scanLast='';return}
-  if(c!==scanLast){scanLast=c;return}
-  scanOn=false;navigator.vibrate&&navigator.vibrate(60);gotCode(c);
+  if(!codeOk(c))return;
+  const el=document.getElementById('scan');
+  if(c!==scanLast){scanLast=c;el.classList.add('seen');document.getElementById('scan-msg').textContent='Håll stilla…';return}
+  scanOn=false;el.classList.add('ok');navigator.vibrate&&navigator.vibrate(60);gotCode(c);
 }
 function manualCode(){
   const c=document.getElementById('scan-code').value.replace(/\D/g,'');
@@ -1274,6 +1324,7 @@ async function gotCode(code){
 function stopScan(){
   scanOn=false;detector=null;
   if(zxReader){try{zxReader.reset()}catch(e){}zxReader=null}
+  document.getElementById('scan').classList.remove('seen','ok');
   if(scanStream){scanStream.getTracks().forEach(t=>t.stop());scanStream=null}
   document.getElementById('scan').classList.remove('show');
 }
