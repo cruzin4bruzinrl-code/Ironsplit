@@ -1,6 +1,6 @@
 // IronSplit service worker – gör appen snabb och användbar offline.
 // Din data ligger i telefonens lagring (localStorage) och påverkas inte av uppdateringar.
-const CACHE = 'ironsplit-v22';
+const CACHE = 'ironsplit-v23';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

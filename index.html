@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>IronSplit</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='26' fill='%230E1024'/%3E%3Crect x='16' y='46' width='68' height='8' rx='4' fill='%237C6CF6'/%3E%3Crect x='22' y='32' width='13' height='36' rx='6' fill='%237C6CF6'/%3E%3Crect x='65' y='32' width='13' height='36' rx='6' fill='%232DD4BF'/%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://world.openfoodfacts.org" crossorigin><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
 <script>try{const s=JSON.parse(localStorage.getItem('is5')||'{}');document.documentElement.dataset.size=s.textSize||'normal';document.documentElement.dataset.theme=s.theme||'dark'}catch(e){}</script>
 <style>
@@ -1182,7 +1182,8 @@ function fromOFF(p,code){
   return{n:name,brand:(p.brands||'').split(',')[0].trim(),code:code||p.code||'',unit:'g',kU:k/100,pU:(+n.proteins_100g||0)/100,cU:(+n.carbohydrates_100g||0)/100,fU:(+n.fat_100g||0)/100,def:sq>0&&sq<1000?Math.round(sq):100};
 }
 async function lookupCode(code){
-  const r=await fetch(`https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=code,product_name,product_name_sv,brands,nutriments,serving_quantity`);
+  const ac=new AbortController();setTimeout(()=>ac.abort(),6000);
+  const r=await fetch(`https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=code,product_name,product_name_sv,brands,nutriments,serving_quantity`,{signal:ac.signal});
   const j=await r.json();
   if(j.status!==1||!j.product)return{prod:null,name:''};
   return{prod:fromOFF(j.product,code),name:(j.product.product_name_sv||j.product.product_name||'').trim()};
@@ -1196,7 +1197,7 @@ async function searchOFF(q){
 /* ═════════ SKANNER ═════════
    Kameran: 1920×1080, autofokus, 2× zoom och ficklampa när telefonen stöder det.
    En kod godkänns först när den lästs likadant två gånger i rad och kontrollsiffran stämmer. */
-let scanStream=null,scanCb=null,scanOn=false,detector=null,zxReader=null,zxCanvas=null,scanLast='',scanTorch=false,scanTick=0;
+let scanSess=0,scanStream=null,scanCb=null,scanOn=false,detector=null,zxReader=null,zxCanvas=null,scanLast='',scanTorch=false,scanTick=0;
 const SCAN_TIP='Håll varan 25–30 cm bort – zooma in om koden blir liten';
 /* Kontrollsiffra för EAN-8, UPC-A (12) och EAN-13 */
 function gtinOk(c){
@@ -1229,37 +1230,42 @@ function localCode(code){
   return [...(S.pantry||[]),...(S.recent||[])].find(x=>x.code&&codeKey(x.code)===k)||null;
 }
 async function startScan(cb){
-  scanCb=cb;scanLast='';scanTorch=false;scanTick=0;
+  scanCb=cb;scanLast='';scanTorch=false;scanTick=0;detector=null;zxReader=null;const sess=++scanSess;
   const el=document.getElementById('scan'),msg=document.getElementById('scan-msg'),v=document.getElementById('scan-v');
-  document.getElementById('scan-code').value='';document.getElementById('scan-torch').hidden=true;
+  document.getElementById('scan-code').value='';document.getElementById('scan-torch').hidden=true;document.getElementById('scan-zoom').hidden=true;
   el.classList.remove('seen','ok');el.classList.add('show');msg.textContent='Startar kameran…';
   document.getElementById('scan-info').textContent='';
-  try{
-    scanStream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},...CAM_SIZE,advanced:[{focusMode:'continuous'}]}});
-  }catch(e){
-    try{scanStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}})}
-    catch(e2){msg.textContent='Kameran gick inte att starta. Tillåt kameran eller skriv siffrorna under streckkoden.';return}
-  }
-  await tuneCamera();
-  v.srcObject=scanStream;try{await v.play()}catch(e){}
-  /* Inbyggd läsare om den finns och klarar EAN, annars ZXing */
-  if('BarcodeDetector' in window){
-    try{
-      const f=BarcodeDetector.getSupportedFormats?await BarcodeDetector.getSupportedFormats():['ean_13'];
-      const want=['ean_13','ean_8','upc_a','upc_e'].filter(x=>f.includes(x));
-      if(want.length)detector=new BarcodeDetector({formats:want});
-    }catch(e){detector=null}
-  }
-  {
-    try{
-      await loadZX();
+  /* Läsaren förbereds medan kameran startar */
+  const prep=(async()=>{
+    if('BarcodeDetector' in window){
+      try{
+        const f=BarcodeDetector.getSupportedFormats?await BarcodeDetector.getSupportedFormats():['ean_13'];
+        const want=['ean_13','ean_8','upc_a','upc_e'].filter(x=>f.includes(x));
+        if(want.length)detector=new BarcodeDetector({formats:want});
+      }catch(e){detector=null}
+    }
+    const zx=loadZX().then(()=>{
       const hints=new Map();hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.EAN_8,ZXing.BarcodeFormat.UPC_A,ZXing.BarcodeFormat.UPC_E]);
-      hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
-      zxReader=new ZXing.MultiFormatReader();zxReader.setHints(hints);
-    }catch(e){zxReader=null;if(!detector){msg.textContent='Kameraskanning fungerar inte här. Skriv siffrorna under streckkoden.';return}}
-  }
-  const inf=document.getElementById('scan-info');inf.textContent=[inf.textContent,detector&&zxReader?'två läsare':detector?'inbyggd läsare':'ZXing'].filter(Boolean).join(' · ');
+      if(!detector)hints.set(ZXing.DecodeHintType.TRY_HARDER,true); // grundligare men långsammare – bara när ZXing är ensam
+      const r=new ZXing.MultiFormatReader();r.setHints(hints);if(sess===scanSess)zxReader=r;
+    }).catch(()=>{});
+    if(!detector)await zx; // utan inbyggd läsare måste ZXing vara klar innan vi börjar
+  })();
+  /* Senast använda kamera direkt (sparas efter första gången), annars bakre kameran */
+  let camId='';try{camId=localStorage.getItem('scanCam')||''}catch(e){}
+  const tries=[
+    camId&&{audio:false,video:{deviceId:{exact:camId},...CAM_SIZE,advanced:[{focusMode:'continuous'}]}},
+    {audio:false,video:{facingMode:{ideal:'environment'},...CAM_SIZE,advanced:[{focusMode:'continuous'}]}},
+    {video:{facingMode:'environment'}}].filter(Boolean);
+  for(const c of tries){try{scanStream=await navigator.mediaDevices.getUserMedia(c);break}catch(e){scanStream=null}}
+  if(!scanStream){msg.textContent='Kameran gick inte att starta. Tillåt kameran eller skriv siffrorna under streckkoden.';return}
+  if(!camId)await pickMainCamera();
+  v.srcObject=scanStream;try{await v.play()}catch(e){}
+  await prep;
+  if(sess!==scanSess||!scanStream)return; // avbruten medan den startade
+  if(!detector&&!zxReader){msg.textContent='Kameraskanning fungerar inte här. Skriv siffrorna under streckkoden.';return}
   scanOn=true;scanLastHit=Date.now();scanLastFocus=Date.now();msg.textContent=SCAN_TIP;scanLoop();
+  tuneCamera().then(()=>{const inf=document.getElementById('scan-info');inf.textContent=[inf.textContent,detector?'inbyggd läsare':'ZXing'].filter(Boolean).join(' · ')});
 }
 /* Klipp ut det som syns i rutan (varannan gång ett bredare band) och skala ner – snabbare och säkrare */
 function scanCrop(v){
@@ -1311,15 +1317,16 @@ async function camApply(extra){
 async function pickMainCamera(){
   try{
     const t=scanStream.getVideoTracks()[0],devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
-    const main=devs.find(d=>/camera2 0\b/.test(d.label)&&/back/i.test(d.label));
-    if(!main||t.getSettings().deviceId===main.deviceId)return;
-    const s=await navigator.mediaDevices.getUserMedia({audio:false,video:{deviceId:{exact:main.deviceId},...CAM_SIZE}});
-    scanStream.getTracks().forEach(x=>x.stop());scanStream=s;
+    const main=devs.find(d=>/camera2 0\b/.test(d.label)&&/back/i.test(d.label)),cur=t.getSettings().deviceId;
+    const keep=id=>{try{if(id)localStorage.setItem('scanCam',id)}catch(e){}};
+    if(!main||cur===main.deviceId){keep(cur);return}
+    scanStream.getTracks().forEach(x=>x.stop());
+    scanStream=await navigator.mediaDevices.getUserMedia({audio:false,video:{deviceId:{exact:main.deviceId},...CAM_SIZE,advanced:[{focusMode:'continuous'}]}});
+    keep(main.deviceId);
   }catch(e){}
 }
 /* Autofokus, 2× zoom och ficklampa – bara det kameran faktiskt klarar */
 async function tuneCamera(){
-  await pickMainCamera();
   const t=scanStream&&scanStream.getVideoTracks()[0];if(!t||!t.getCapabilities)return;
   camCap={};camZoom=null;try{camCap=t.getCapabilities()}catch(e){}
   if(camCap.zoom&&camCap.zoom.max>=1)camZoom=Math.max(camCap.zoom.min||1,Math.min(2,camCap.zoom.max));
@@ -1377,9 +1384,11 @@ async function gotCode(code){
   let prod=localCode(code),name='';
   if(prod)prod={...prod,code:prod.code||code};
   else{
-    for(const v of codeVariants(code)){
-      try{const r=await lookupCode(v);if(r.prod){prod=r.prod;break}if(r.name&&!name)name=r.name}catch(e){}
-    }
+    /* Alla varianter samtidigt – först med näringsvärde vinner, max 6 s */
+    const rs=codeVariants(code).map(v=>lookupCode(v).catch(()=>({prod:null,name:''})));
+    const hit=await new Promise(res=>{let left=rs.length;const t=setTimeout(()=>res(null),6000);
+      rs.forEach(p=>p.then(r=>{if(r.prod){clearTimeout(t);res(r.prod)}else if(--left===0){clearTimeout(t);res(null)}}))});
+    prod=hit;if(!prod){const all=await Promise.race([Promise.all(rs),new Promise(r=>setTimeout(()=>r([]),300))]);name=(all.find(r=>r.name)||{}).name||''}
     if(prod)addToPantry(prod);
   }
   stopScan();
@@ -1387,7 +1396,7 @@ async function gotCode(code){
   else{toast(name?'Näringsvärde saknas – fyll i eller fotografera det':'Varan hittades inte – fyll i eller fotografera näringsvärdet');scanCb&&scanCb(null,code,name)}
 }
 function stopScan(){
-  scanOn=false;detector=null;
+  scanOn=false;detector=null;scanSess++;
   if(zxReader){try{zxReader.reset()}catch(e){}zxReader=null}
   document.getElementById('scan').classList.remove('seen','ok');
   if(scanStream){scanStream.getTracks().forEach(t=>t.stop());scanStream=null}
