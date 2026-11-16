@@ -290,7 +290,7 @@ table.tbl{width:100%;border-collapse:collapse;margin-top:.5rem;font-variant-nume
 .scan.show{display:flex}
 .scan video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 /* Flytande skanningsanimation: en vätskeyta som böljar upp och ner i rutan */
-.scan-box{--lq:#5ee7ff;position:absolute;left:50%;top:40%;transform:translate(-50%,-50%);width:80%;max-width:360px;height:11rem;border-radius:1.4rem;overflow:hidden;box-shadow:0 0 0 2000px rgba(0,0,0,.5);transition:transform .35s cubic-bezier(.2,1.6,.4,1)}
+.scan-box{--lq:#5ee7ff;position:absolute;left:50%;top:30%;transform:translate(-50%,-50%);width:80%;max-width:360px;height:11rem;border-radius:1.4rem;overflow:hidden;box-shadow:0 0 0 2000px rgba(0,0,0,.5);transition:transform .35s cubic-bezier(.2,1.6,.4,1)}
 .scan-box .cn{position:absolute;inset:0;border-radius:inherit;border:3px solid rgba(255,255,255,.9);animation:cnp 2.4s ease-in-out infinite}
 .liq{position:absolute;inset:0;animation:sweep 2.6s cubic-bezier(.45,0,.55,1) infinite alternate}
 .liq b{position:absolute;left:0;right:0;top:0;height:1.6rem;background:linear-gradient(var(--lq) 35%,color-mix(in srgb,var(--lq) 22%,transparent));opacity:.85;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 24' preserveAspectRatio='none'%3E%3Cpath d='M0 12 C20 2 40 2 60 12 S100 22 120 12 V24 H0Z'/%3E%3C/svg%3E") repeat-x 0 0/9rem 100%;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 24' preserveAspectRatio='none'%3E%3Cpath d='M0 12 C20 2 40 2 60 12 S100 22 120 12 V24 H0Z'/%3E%3C/svg%3E") repeat-x 0 0/9rem 100%;animation:flow 1.8s linear infinite;filter:drop-shadow(0 0 8px var(--lq));transition:background .3s}
@@ -309,8 +309,15 @@ table.tbl{width:100%;border-collapse:collapse;margin-top:.5rem;font-variant-nume
 .scan.ok .scan-box .cn{animation:none;border-color:#3ddc84}
 .scan.ok .ok-mark{animation:tick .35s .25s ease-out forwards}
 @media (prefers-reduced-motion:reduce){.liq,.liq b,.scan-box .cn{animation:none}.liq{transform:translateY(45%)}}
-.scan-ui{position:absolute;left:1rem;right:1rem;bottom:calc(1.2rem + env(safe-area-inset-bottom,0px));display:grid;gap:.6rem}
+.scan-ui{position:absolute;left:1rem;right:1rem;bottom:calc(1rem + env(safe-area-inset-bottom,0px));display:grid;gap:.5rem}
 .scan-msg{text-align:center;color:#fff;background:rgba(0,0,0,.6);padding:.8rem;border-radius:.9rem;font-size:1.05rem}
+.scan-tools{display:flex;justify-content:center;align-items:center;gap:.5rem;flex-wrap:wrap}
+.scan-zoom{display:flex;gap:.4rem}
+.scan-zoom[hidden],.scan-lamp[hidden]{display:none}
+.scan-lamp{min-height:2.8rem;padding:0 1rem;border-radius:2rem;border:2px solid rgba(255,255,255,.5);background:rgba(0,0,0,.55);color:#fff;font-weight:700;font-size:.95rem}
+.scan-lamp[aria-pressed=true]{background:#ffd54a;color:#000;border-color:#ffd54a}
+.scan-zoom button{min-width:3rem;min-height:2.8rem;border-radius:2rem;border:2px solid rgba(255,255,255,.5);background:rgba(0,0,0,.55);color:#fff;font-weight:700;font-size:1rem}
+.scan-zoom button[aria-pressed=true]{background:#fff;color:#000;border-color:#fff}
 .scan-info{display:block;margin-top:.3rem;font-size:.8rem;opacity:.7}
 .scan-ring{position:fixed;width:4.5rem;height:4.5rem;margin:-2.25rem 0 0 -2.25rem;border:2px solid #ffd54a;border-radius:50%;opacity:0;pointer-events:none;z-index:2}
 .scan-ring.go{animation:ring .9s ease-out}
@@ -733,7 +740,7 @@ html[data-size=xstor] .big b{font-size:2.6rem}
 <div class="sheet-bg" id="dlg-bg" onclick="if(event.target===this)closeDlg()"><div class="sheet" id="dlg" role="dialog" aria-modal="true"></div></div>
 <div class="scan" id="scan" onclick="tapFocus(event)"><video id="scan-v" playsinline muted autoplay></video><span class="scan-ring" id="scan-ring"></span><div class="scan-box" aria-hidden="true"><div class="liq"><b></b><b></b></div><span class="cn"></span><svg class="ok-mark" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
   <div class="scan-ui"><div class="scan-msg"><span id="scan-msg">Startar kameran…</span><small class="scan-info">Tryck på bilden för att fokusera<br><span id="scan-info"></span></small></div>
-  <button class="scan-close" id="scan-torch" hidden aria-pressed="false" onclick="setTorch(!scanTorch)">Släck lampan</button>
+  <div class="scan-tools"><div class="scan-zoom" id="scan-zoom" hidden></div><button class="scan-lamp" id="scan-torch" hidden aria-pressed="false" onclick="setTorch(!scanTorch)">Släck lampan</button></div>
   <div class="scan-row"><input id="scan-code" type="number" inputmode="numeric" placeholder="Eller skriv streckkoden" aria-label="Streckkod"><button onclick="manualCode()">Sök</button></div>
   <button class="scan-close" onclick="stopScan()">Avbryt</button></div></div>
 <script>
@@ -1190,7 +1197,7 @@ async function searchOFF(q){
    Kameran: 1920×1080, autofokus, 2× zoom och ficklampa när telefonen stöder det.
    En kod godkänns först när den lästs likadant två gånger i rad och kontrollsiffran stämmer. */
 let scanStream=null,scanCb=null,scanOn=false,detector=null,zxReader=null,zxCanvas=null,scanLast='',scanTorch=false,scanTick=0;
-const SCAN_TIP='Håll streckkoden inom rutan, 15–20 cm bort';
+const SCAN_TIP='Håll varan 25–30 cm bort – zooma in om koden blir liten';
 /* Kontrollsiffra för EAN-8, UPC-A (12) och EAN-13 */
 function gtinOk(c){
   if(!/^\d+$/.test(c)||![8,12,13,14].includes(c.length))return false;
@@ -1252,7 +1259,7 @@ async function startScan(cb){
     }catch(e){zxReader=null;if(!detector){msg.textContent='Kameraskanning fungerar inte här. Skriv siffrorna under streckkoden.';return}}
   }
   const inf=document.getElementById('scan-info');inf.textContent=[inf.textContent,detector&&zxReader?'två läsare':detector?'inbyggd läsare':'ZXing'].filter(Boolean).join(' · ');
-  scanOn=true;msg.textContent=SCAN_TIP;scanLoop();
+  scanOn=true;scanLastHit=Date.now();scanLastFocus=Date.now();msg.textContent=SCAN_TIP;scanLoop();
 }
 /* Klipp ut det som syns i rutan (varannan gång ett bredare band) och skala ner – snabbare och säkrare */
 function scanCrop(v){
@@ -1282,7 +1289,7 @@ async function scanLoop(){
       }
     }catch(e){}
   }
-  if(scanOn)setTimeout(scanLoop,detector?60:40);
+  if(scanOn){autoRefocus();setTimeout(scanLoop,detector?60:40)}
 }
 /* Kamerainställningar. applyConstraints ersätter ALLA tidigare inställningar,
    så hela uppsättningen skickas varje gång (annars tappas fokus, zoom och upplösning). */
@@ -1317,9 +1324,26 @@ async function tuneCamera(){
   camCap={};camZoom=null;try{camCap=t.getCapabilities()}catch(e){}
   if(camCap.zoom&&camCap.zoom.max>=1)camZoom=Math.max(camCap.zoom.min||1,Math.min(2,camCap.zoom.max));
   scanTorch=!!camCap.torch;document.getElementById('scan-torch').hidden=!camCap.torch;torchBtn();
+  const zs=camCap.zoom?[1,2,3,4].filter(z=>z>=(camCap.zoom.min||1)&&z<=camCap.zoom.max):[],zb=document.getElementById('scan-zoom');
+  zb.hidden=zs.length<2;zb.innerHTML=zs.map(z=>`<button aria-pressed="${z===camZoom}" onclick="setZoom(${z})">${z}×</button>`).join('');
   await camApply();
   const st=t.getSettings?t.getSettings():{};
   document.getElementById('scan-info').textContent=[st.width&&st.height?st.width+'×'+st.height:'',st.focusMode?'fokus: '+st.focusMode:'',st.zoom?'zoom '+(Math.round(st.zoom*10)/10)+'×':''].filter(Boolean).join(' · ');
+}
+async function setZoom(z){
+  camZoom=z;document.querySelectorAll('#scan-zoom button').forEach(b=>b.setAttribute('aria-pressed',b.textContent===z+'×'));
+  scanLastFocus=0;await camApply();
+}
+/* Hittas ingen kod på en stund: be kameran fokusera om mitt i rutan (många Android-kameror fastnar annars) */
+let scanLastFocus=0,scanLastHit=0;
+async function autoRefocus(){
+  const now=Date.now(),fm=camCap.focusMode||[];
+  if(!fm.includes('single-shot')||now-scanLastHit<3000||now-scanLastFocus<3500)return;
+  scanLastFocus=now;
+  const v=document.getElementById('scan-v'),r=v.getBoundingClientRect(),br=document.querySelector('.scan-box').getBoundingClientRect();
+  const y=Math.min(1,Math.max(0,(br.top+br.height/2-r.top)/(r.height||1)));
+  await camApply({focusMode:'single-shot',pointsOfInterest:[{x:.5,y}]});
+  clearTimeout(camFocusT);camFocusT=setTimeout(()=>{if(scanOn)camApply()},1200);
 }
 function torchBtn(){const b=document.getElementById('scan-torch');b.textContent=scanTorch?'Släck lampan':'Tänd lampan';b.setAttribute('aria-pressed',scanTorch)}
 async function setTorch(on){scanTorch=!!on;torchBtn();await camApply()}
@@ -1328,7 +1352,7 @@ async function tapFocus(ev){
   if(!scanStream||ev.target.closest('.scan-ui'))return;
   const v=document.getElementById('scan-v'),r=v.getBoundingClientRect(),x=(ev.clientX-r.left)/r.width,y=(ev.clientY-r.top)/r.height;
   const ring=document.getElementById('scan-ring');ring.style.left=ev.clientX+'px';ring.style.top=ev.clientY+'px';ring.classList.remove('go');void ring.offsetWidth;ring.classList.add('go');
-  const fm=camCap.focusMode||[];
+  const fm=camCap.focusMode||[];scanLastFocus=Date.now()+2000;
   if(fm.includes('single-shot'))await camApply({focusMode:'single-shot',pointsOfInterest:[{x,y}]});
   else if(fm.includes('manual')||fm.includes('continuous')){await camApply({focusMode:fm.includes('manual')?'manual':'continuous',pointsOfInterest:[{x,y}]})}
   clearTimeout(camFocusT);camFocusT=setTimeout(()=>camApply(),2500);
@@ -1337,6 +1361,7 @@ async function tapFocus(ev){
 function onRead(raw){
   if(!scanOn)return;const c=String(raw||'').replace(/\D/g,'');
   if(!codeOk(c))return;
+  scanLastHit=Date.now();
   const el=document.getElementById('scan');
   if(c!==scanLast){scanLast=c;el.classList.add('seen');document.getElementById('scan-msg').textContent='Håll stilla…';return}
   scanOn=false;el.classList.add('ok');navigator.vibrate&&navigator.vibrate(60);gotCode(c);
